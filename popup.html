@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>划词翻译(免费)</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="panel">
+      <div class="heading">
+        <div class="mark" aria-hidden="true">译</div>
+        <div>
+          <h1>划词翻译(免费)</h1>
+          <p>选中文字后自动显示翻译</p>
+        </div>
+      </div>
+
+      <button class="switch-row" id="toggle" type="button" aria-pressed="true">
+        <span class="switch-copy">
+          <strong id="state-title">翻译已开启</strong>
+          <span id="state-description">在网页中选中文字即可自动翻译</span>
+        </span>
+        <span class="switch" aria-hidden="true"><span class="knob"></span></span>
+      </button>
+
+      <label class="provider-row" for="provider">
+        <span><strong>翻译服务</strong><small>选择自动翻译时使用的服务</small></span>
+        <select id="provider">
+          <option value="google">Google 翻译</option>
+          <option value="sogou" selected>搜狗翻译</option>
+          <option value="mymemory">MyMemory</option>
+        </select>
+      </label>
+
+      <p class="note note-emphasis" id="note"><strong>如果翻译功能无法正常使用，请尝试切换翻译服务</strong></p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

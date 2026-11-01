@@ -1,0 +1,47 @@
+{
+  "action": {
+    "default_icon": {
+      "128": "icons/icon128.png",
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png"
+    },
+    "default_popup": "popup.html",
+    "default_title": "划词翻译(免费)"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "all_frames": true,
+      "js": [
+        "languages.js",
+        "content.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "description": "选中文字后自动显示翻译，可手动选择翻译服务和语种。",
+  "host_permissions": [
+    "https://translate.googleapis.com/*",
+    "https://translate.google.com/*",
+    "https://api.mymemory.translated.net/*",
+    "https://fanyi.sogou.com/*"
+  ],
+  "icons": {
+    "128": "icons/icon128.png",
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png"
+  },
+  "manifest_version": 3,
+  "name": "划词翻译(免费)",
+  "permissions": [
+    "storage"
+  ],
+  "version": "1.0.24"
+}
