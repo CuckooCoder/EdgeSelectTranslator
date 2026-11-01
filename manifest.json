@@ -28,9 +28,8 @@
   "description": "选中文字后自动显示翻译，可手动选择翻译服务和语种。",
   "host_permissions": [
     "https://translate.googleapis.com/*",
-    "https://translate.google.com/*",
-    "https://api.mymemory.translated.net/*",
-    "https://fanyi.sogou.com/*"
+    "https://fanyi.sogou.com/*",
+    "https://m.youdao.com/*"
   ],
   "icons": {
     "128": "icons/icon128.png",
@@ -43,5 +42,5 @@
   "permissions": [
     "storage"
   ],
-  "version": "1.0.24"
+  "version": "1.0.33"
 }

@@ -1,13 +1,21 @@
-const GOOGLE_TRANSLATE_ENDPOINTS = [
-  "https://translate.googleapis.com/translate_a/single",
-  "https://translate.google.com/translate_a/single"
-];
-const PROVIDERS = { google: "Google 翻译", mymemory: "MyMemory", sogou: "搜狗翻译" };
-const MYMEMORY_ENDPOINT = "https://api.mymemory.translated.net/get";
+const GOOGLE_TRANSLATE_ENDPOINT = "https://translate.googleapis.com/translate_a/single";
+const PROVIDERS = { google: "Google 翻译", sogou: "搜狗翻译", youdao: "有道翻译" };
 const SOGOU_TRANSLATE_ENDPOINT = "https://fanyi.sogou.com/api/transpc/hunyuan/translate";
+const YOUDAO_TRANSLATE_ENDPOINT = "https://m.youdao.com/translate";
 const REQUEST_TIMEOUT_MS = 12000;
-const MAX_CHARS = 5000;
+const GOOGLE_MAX_REQUEST_BYTES = 16 * 1024;
+const SOGOU_MAX_REQUEST_BYTES = 16 * 1024;
+const YOUDAO_MAX_FORM_BYTES = 640;
 const SOGOU_LANGUAGES = new Set(["zh-CN", "en", "ja", "ko"]);
+const YOUDAO_LANGUAGES = new Map([
+  ["zh-CN", "ZH_CN"],
+  ["en", "EN"],
+  ["ja", "JA"],
+  ["ko", "KR"],
+  ["fr", "FR"],
+  ["ru", "RU"],
+  ["es", "SP"]
+]);
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type !== "translate-selection") return undefined;
@@ -22,17 +30,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 async function translate(input, requestedSource, requestedTarget, requestedProvider) {
   const text = String(input || "").trim();
   if (!text) throw new Error("没有可翻译的文字。");
-  if (exceedsCharacterLimit(text, MAX_CHARS)) {
-    throw new Error("选中文本超过 5000 字，本次未发送翻译请求。请缩短选区后重试。");
-  }
-
   const source = normalizeLanguage(requestedSource, true);
   const target = normalizeLanguage(requestedTarget, false);
   const provider = normalizeProvider(requestedProvider);
+  if (provider === "youdao") return translateWithYoudao(text, source, target);
   if (source !== "auto" && source === target) {
     return { translated: text, detectedLanguage: source, target, provider };
   }
-  if (provider === "mymemory") return translateWithMyMemory(text, source, target);
   if (provider === "sogou") return translateWithSogou(text, source, target);
   return translateWithGoogle(text, source, target);
 }
@@ -41,12 +45,82 @@ function normalizeProvider(value) {
   return Object.prototype.hasOwnProperty.call(PROVIDERS, value) ? value : "sogou";
 }
 
-function exceedsCharacterLimit(text, limit) {
-  let count = 0;
-  for (const _character of text) {
-    if (++count > limit) return true;
+function youdaoRequestType(text, requestedSource, target) {
+  const source = requestedSource === "auto" ? inferSourceLanguage(text) : requestedSource;
+  if (source === target) return { type: "", source };
+
+  if (requestedSource === "auto" && target === "zh-CN" && source !== "zh-CN") {
+    return { type: "auto", source };
   }
-  return false;
+
+  const sourceCode = YOUDAO_LANGUAGES.get(source);
+  const targetCode = YOUDAO_LANGUAGES.get(target);
+  if (!sourceCode || !targetCode || (source !== "zh-CN" && target !== "zh-CN")) {
+    throw new Error("有道网页接口目前只支持中文与英语、日语、韩语、法语、俄语、西班牙语互译；请切换翻译服务。");
+  }
+  return { type: `${sourceCode}2${targetCode}`, source };
+}
+
+function makeYoudaoForm(text, requestedSource, target) {
+  const { type, source } = youdaoRequestType(text, requestedSource, target);
+  if (!type) return { body: null, source };
+  const body = new URLSearchParams({ inputtext: text, type });
+  const byteLength = new TextEncoder().encode(body.toString()).length;
+  if (byteLength > YOUDAO_MAX_FORM_BYTES) {
+    throw new Error(`有道单次请求超过 ${YOUDAO_MAX_FORM_BYTES} 字节（当前 ${byteLength} 字节），请缩短文本或切换翻译服务。`);
+  }
+  return { body, source };
+}
+
+async function translateWithYoudao(text, requestedSource, target) {
+  const initial = youdaoRequestType(text, requestedSource, target);
+  if (!initial.type) return { translated: text, detectedLanguage: initial.source, target, provider: "youdao" };
+
+  const { body, source } = makeYoudaoForm(text, requestedSource, target);
+  if (!body) return { translated: text, detectedLanguage: source, target, provider: "youdao" };
+  const response = await fetchWithTimeout(YOUDAO_TRANSLATE_ENDPOINT, {
+    method: "POST",
+    cache: "no-store",
+    credentials: "omit",
+    referrer: YOUDAO_TRANSLATE_ENDPOINT,
+    referrerPolicy: "strict-origin-when-cross-origin",
+    body
+  });
+  if (response.status === 413) {
+    throw new Error(`有道单次请求超过 ${YOUDAO_MAX_FORM_BYTES} 字节表单上限，请缩短选区后重试。`);
+  }
+  if (!response.ok) throw new Error(`有道翻译请求失败（HTTP ${response.status}）。`);
+
+  const html = await response.text();
+  const result = parseYoudaoResult(html);
+  if (!result) throw new Error("有道翻译未返回译文，请尝试切换翻译服务。");
+  return { translated: result, detectedLanguage: source, target, provider: "youdao" };
+}
+
+function parseYoudaoResult(html) {
+  const list = String(html).match(/<ul\b[^>]*id=["']translateResult["'][^>]*>([\s\S]*?)<\/ul>/i)?.[1];
+  if (!list) return "";
+  const items = [...list.matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/gi)]
+    .map((match) => decodeHtmlEntities(match[1]
+      .replace(/<br\s*\/?\s*>/gi, "\n")
+      .replace(/<[^>]*>/g, "")).trim())
+    .filter(Boolean);
+  return items.join("\n");
+}
+
+function decodeHtmlEntities(text) {
+  const named = {
+    amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ",
+    lsquo: "‘", rsquo: "’", ldquo: "“", rdquo: "”", hellip: "…", mdash: "—", ndash: "–"
+  };
+  return String(text).replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (entity, value) => {
+    if (value[0] === "#") {
+      const hex = value[1]?.toLowerCase() === "x";
+      const codePoint = Number.parseInt(value.slice(hex ? 2 : 1), hex ? 16 : 10);
+      return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : entity;
+    }
+    return named[value.toLowerCase()] ?? entity;
+  });
 }
 
 function normalizeLanguage(value, allowAuto) {
@@ -57,99 +131,51 @@ function normalizeLanguage(value, allowAuto) {
 }
 
 async function translateWithGoogle(text, source, target) {
-  const params = new URLSearchParams({
-    client: "gtx",
-    sl: source,
-    tl: target,
-    dt: "t",
-    q: text
-  });
-  const errors = [];
-  for (const endpoint of GOOGLE_TRANSLATE_ENDPOINTS) {
-    try {
-      const response = await fetchWithTimeout(`${endpoint}?${params}`, { cache: "no-store" });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-      const payload = await response.json();
-      const translated = Array.isArray(payload?.[0])
-        ? payload[0].map((part) => part?.[0] || "").join("")
-        : "";
-      if (!translated) throw new Error("返回内容中没有译文");
-
-      return {
-        translated,
-        detectedLanguage: payload?.[2] || "",
-        target,
-        provider: "google"
-      };
-    } catch (error) {
-      errors.push(error.message);
-    }
-  }
-  throw new Error(`Google 翻译接口未能响应（${errors.join("；")}）。请稍后重试。`);
-}
-
-async function translateWithMyMemory(text, requestedSource, target) {
-  const source = requestedSource === "auto" ? inferSourceLanguage(text) : requestedSource;
-  const chunks = splitUtf8(text, 450);
-  const translatedChunks = [];
-
-  for (const chunk of chunks) {
-    const params = new URLSearchParams({ q: chunk, langpair: `${source}|${target}` });
-    const response = await fetchWithTimeout(`${MYMEMORY_ENDPOINT}?${params}`, { cache: "no-store" });
-    if (!response.ok) throw new Error(`MyMemory 翻译请求失败（HTTP ${response.status}）。`);
-    const payload = await response.json();
-    if (Number(payload?.responseStatus) !== 200 || !payload?.responseData?.translatedText) {
-      const detail = payload?.quotaFinished
-        ? "免费额度可能已用完"
-        : payload?.responseDetails || "接口没有返回译文";
-      throw new Error(`MyMemory：${detail}。`);
-    }
-    translatedChunks.push(decodeCommonEntities(payload.responseData.translatedText));
+  const params = new URLSearchParams({ client: "gtx", sl: source, tl: target, dt: "t", q: text });
+  const url = `${GOOGLE_TRANSLATE_ENDPOINT}?${params}`;
+  const requestBytes = new TextEncoder().encode(url).length;
+  if (requestBytes > GOOGLE_MAX_REQUEST_BYTES) {
+    throw new Error(`Google 翻译单次请求超过 ${GOOGLE_MAX_REQUEST_BYTES} 字节（当前 ${requestBytes} 字节），请缩短选区后重试。`);
   }
 
-  return {
-    translated: translatedChunks.join(""),
-    detectedLanguage: source,
-    target,
-    provider: "mymemory"
-  };
+  const response = await fetchWithTimeout(url, { cache: "no-store" });
+  if (!response.ok) throw new Error(`Google 翻译请求失败（HTTP ${response.status}）。`);
+  const payload = await response.json();
+  const translated = Array.isArray(payload?.[0])
+    ? payload[0].map((part) => part?.[0] || "").join("")
+    : "";
+  if (!translated) throw new Error("Google 翻译接口没有返回译文。");
+  return { translated, detectedLanguage: payload?.[2] || "", target, provider: "google" };
 }
 
 async function translateWithSogou(text, requestedSource, target) {
   const source = requestedSource === "auto" ? inferSourceLanguage(text) : requestedSource;
   if (!SOGOU_LANGUAGES.has(source) || !SOGOU_LANGUAGES.has(target) || (source !== "zh-CN" && target !== "zh-CN")) {
-    throw new Error("搜狗网页接口目前仅支持简体中文与英语、日语、韩语互译；请手动切换到 Google 翻译或 MyMemory。");
+    throw new Error("搜狗网页接口目前仅支持简体中文与英语、日语、韩语互译；请切换到 Google 翻译。");
   }
 
   const sourceCode = source === "zh-CN" ? "zh-CHS" : source;
   const targetCode = target === "zh-CN" ? "zh-CHS" : target;
-  const chunks = splitByCharacters(text, 4000);
-  const translatedChunks = [];
-
-  for (const chunk of chunks) {
-    const response = await fetchWithTimeout(SOGOU_TRANSLATE_ENDPOINT, {
-      method: "POST",
-      cache: "no-store",
-      credentials: "omit",
-      headers: { "Content-Type": "application/json;charset=UTF-8" },
-      body: JSON.stringify({ text: chunk, from_lang: sourceCode, to_lang: targetCode })
-    });
-    if (!response.ok) throw new Error(`搜狗翻译请求失败（HTTP ${response.status}）。`);
-    const payload = await response.json();
-    if (Number(payload?.status) !== 0 || Number(payload?.data?.code) !== 0 || !payload?.data?.content) {
-      const detail = payload?.data?.message || payload?.message || "接口没有返回译文";
-      throw new Error(`搜狗翻译：${detail}。`);
-    }
-    translatedChunks.push(payload.data.content);
+  const body = JSON.stringify({ text, from_lang: sourceCode, to_lang: targetCode });
+  const requestBytes = new TextEncoder().encode(body).length;
+  if (requestBytes > SOGOU_MAX_REQUEST_BYTES) {
+    throw new Error(`搜狗翻译单次请求超过 ${SOGOU_MAX_REQUEST_BYTES} 字节（当前 ${requestBytes} 字节），请缩短选区后重试。`);
   }
 
-  return {
-    translated: translatedChunks.join(""),
-    detectedLanguage: source,
-    target,
-    provider: "sogou"
-  };
+  const response = await fetchWithTimeout(SOGOU_TRANSLATE_ENDPOINT, {
+    method: "POST",
+    cache: "no-store",
+    credentials: "omit",
+    headers: { "Content-Type": "application/json;charset=UTF-8" },
+    body
+  });
+  if (!response.ok) throw new Error(`搜狗翻译请求失败（HTTP ${response.status}）。`);
+  const payload = await response.json();
+  if (Number(payload?.status) !== 0 || Number(payload?.data?.code) !== 0 || !payload?.data?.content) {
+    const detail = payload?.data?.message || payload?.message || "接口没有返回译文";
+    throw new Error(`搜狗翻译：${detail}。`);
+  }
+  return { translated: payload.data.content, detectedLanguage: source, target, provider: "sogou" };
 }
 
 function inferSourceLanguage(text) {
@@ -168,43 +194,6 @@ function inferSourceLanguage(text) {
   if (/[àâçèêëîïôùûÿœ]/i.test(text)) return "fr";
   if (/[àèìòù]/i.test(text)) return "it";
   return "en";
-}
-
-function splitByCharacters(text, maxCharacters) {
-  const characters = Array.from(text);
-  const chunks = [];
-  for (let index = 0; index < characters.length; index += maxCharacters) {
-    chunks.push(characters.slice(index, index + maxCharacters).join(""));
-  }
-  return chunks;
-}
-
-function splitUtf8(text, maxBytes) {
-  const encoder = new TextEncoder();
-  const chunks = [];
-  let chunk = "";
-  let size = 0;
-  for (const character of text) {
-    const characterBytes = encoder.encode(character).length;
-    if (chunk && size + characterBytes > maxBytes) {
-      chunks.push(chunk);
-      chunk = "";
-      size = 0;
-    }
-    chunk += character;
-    size += characterBytes;
-  }
-  if (chunk) chunks.push(chunk);
-  return chunks;
-}
-
-function decodeCommonEntities(text) {
-  return String(text)
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;|&apos;/g, "'");
 }
 
 async function fetchWithTimeout(url, options = {}) {

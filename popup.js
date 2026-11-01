@@ -16,7 +16,7 @@ chrome.storage.local.get({ enabled: true }, (settings) => {
 });
 
 chrome.storage.local.get({ provider: "sogou" }, (settings) => {
-  provider.value = ["google", "mymemory", "sogou"].includes(settings.provider) ? settings.provider : "sogou";
+  provider.value = ["google", "sogou", "youdao"].includes(settings.provider) ? settings.provider : "sogou";
   render();
 });
 

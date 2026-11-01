@@ -1,7 +1,7 @@
 (() => {
   const HOST_ID = "edge-bilingual-translator-host";
-  const MAX_CHARS = 5000;
-  const PROVIDER_NAMES = { google: "Google 翻译", mymemory: "MyMemory", sogou: "搜狗翻译" };
+  const PROVIDER_NAMES = { google: "Google 翻译", sogou: "搜狗翻译", youdao: "有道翻译" };
+  const PROVIDER_MAX_BYTES = { google: 16 * 1024, sogou: 16 * 1024, youdao: 640 };
   const AVAILABLE_LANGUAGES = globalThis.TRANSLATION_LANGUAGES || [
     { code: "zh-CN", label: "中文（简体）" },
     { code: "zh-TW", label: "中文（繁体）" },
@@ -40,7 +40,7 @@
   let currentProvider = "sogou";
   let requestNumber = 0;
   let requestTimeout;
-  let hideTimer;
+  let dismissedSelectionText = "";
   let enabled = true;
 
   chrome.storage.local.get({ enabled: true, provider: "sogou" }, (settings) => {
@@ -173,8 +173,6 @@
       translateCurrent();
     });
     updateProviderLabel();
-    host.addEventListener("mouseenter", () => clearTimeout(hideTimer));
-    host.addEventListener("mouseleave", scheduleHideIfSelectionGone);
   }
 
   function populateLanguageSelect(select, includeAuto) {
@@ -219,27 +217,23 @@
     return [selection.anchorNode, selection.focusNode].some((node) => node?.getRootNode() === shadow);
   }
 
-  function exceedsCharacterLimit(text, limit) {
-    let count = 0;
-    for (const _character of text) {
-      if (++count > limit) return true;
-    }
-    return false;
-  }
-
   function translateSelectionNow() {
     if (!enabled) return;
     const selection = window.getSelection();
     if (selectionIsInsideCard(selection)) return;
     const text = String(selection?.toString() || "").trim();
-    if (!text) return;
+    if (!text) {
+      dismissedSelectionText = "";
+      return;
+    }
+    if (text === dismissedSelectionText) return;
+    dismissedSelectionText = "";
     if (host?.style.display !== "none" && text === currentText) return;
     showSelection(text);
   }
 
   function showSelection(selectedText) {
     if (!enabled) return;
-    clearTimeout(hideTimer);
     const selection = window.getSelection();
     const text = String(selectedText || selection?.toString() || "").trim();
     const selectionRect = selectionBox(selection);
@@ -269,17 +263,17 @@
     shadow.querySelector(".language").textContent = "";
     shadow.querySelector(".swap").disabled = true;
     updateProviderLabel();
-    if (exceedsCharacterLimit(text, MAX_CHARS)) {
-      showError("选中文本超过 5000 字，本次未发送翻译请求。请缩短选区后重试。");
-      return;
-    }
     translateCurrent();
   }
 
   function updateProviderLabel() {
     if (!shadow) return;
     const label = shadow.querySelector(".provider-label");
-    if (label) label.textContent = `${PROVIDER_NAMES[currentProvider] || PROVIDER_NAMES.auto} · 最多 5000 字`;
+    if (label) {
+      const selectedBytes = new TextEncoder().encode(currentText).length;
+      const maxBytes = PROVIDER_MAX_BYTES[currentProvider] || PROVIDER_MAX_BYTES.sogou;
+      label.textContent = `文本长度 ${selectedBytes}/${maxBytes} 字节`;
+    }
   }
 
   function translateCurrent() {
@@ -384,7 +378,8 @@
   }
 
   function hideCard() {
-    clearTimeout(hideTimer);
+    const selectedText = String(window.getSelection()?.toString() || "").trim();
+    dismissedSelectionText = selectedText || currentText || dismissedSelectionText;
     clearTimeout(requestTimeout);
     if (host) host.style.display = "none";
     currentText = "";
@@ -392,27 +387,14 @@
     requestNumber++;
   }
 
-  function scheduleHideIfSelectionGone() {
-    hideTimer = setTimeout(() => {
-      if (!window.getSelection()?.toString().trim()) hideCard();
-    }, 350);
-  }
-
   // Translate once the selection gesture ends, instead of while the range is changing.
   document.addEventListener("pointerup", translateSelectionNow);
-  document.addEventListener("mouseup", translateSelectionNow);
-  document.addEventListener("touchend", translateSelectionNow);
   document.addEventListener("keyup", (event) => {
     if (event.key === "Shift" || !event.shiftKey) translateSelectionNow();
   });
 
   document.addEventListener("pointerdown", (event) => {
-    if (!host || host.style.display === "none") return;
-    if (event.composedPath().includes(host)) return;
-    if (window.getSelection()?.toString().trim()) hideCard();
-  }, true);
-
-  window.addEventListener("scroll", () => {
-    if (host && host.style.display !== "none") hideCard();
+    if (!host || host.style.display === "none" || event.composedPath().includes(host)) return;
+    hideCard();
   }, true);
 })();
