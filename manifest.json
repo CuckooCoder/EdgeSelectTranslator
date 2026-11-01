@@ -25,7 +25,8 @@
       "run_at": "document_idle"
     }
   ],
-  "description": "选中文字后自动显示翻译，可手动选择翻译服务和语种。",
+  "description": "__MSG_extensionDescription__",
+  "default_locale": "zh_CN",
   "host_permissions": [
     "https://translate.googleapis.com/*",
     "https://fanyi.sogou.com/*",
@@ -38,9 +39,9 @@
     "48": "icons/icon48.png"
   },
   "manifest_version": 3,
-  "name": "划词翻译(免费)",
+  "name": "__MSG_extensionName__",
   "permissions": [
     "storage"
   ],
-  "version": "1.0.33"
+  "version": "1.0.34"
 }
